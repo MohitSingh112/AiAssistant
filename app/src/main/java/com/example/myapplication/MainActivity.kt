@@ -27,25 +27,45 @@ import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.provider.AlarmClock
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.View
+import android.widget.ProgressBar
 import com.google.ai.client.generativeai.BuildConfig
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.BlockThreshold
 import com.google.ai.client.generativeai.type.HarmCategory
 import com.google.ai.client.generativeai.type.SafetySetting
 import com.google.ai.client.generativeai.type.generationConfig
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 
 class MainActivity : AppCompatActivity() {
     companion object {
         private const val REQUEST_CODE_CALL_PERMISSION = 1001
+        private const val SUGGESTION_DELAY = 500L // Delay in milliseconds
     }
     // Variable to store the phone number temporarily
     private var pendingCallNumber: String? = null
 
     private val scope = CoroutineScope(Dispatchers.IO)
+    private var suggestionJob: Job? = null
+
+
+    // Define UI components as class properties
+    private lateinit var etQuestion: EditText
+    private lateinit var txtResponse: TextView
+    private lateinit var btnSubmit: Button
+    private lateinit var btnScheduleTask: Button
+    private lateinit var suggestionsChipGroup: ChipGroup
+    private lateinit var progressBar: ProgressBar
+
 
     //private val client = OkHttpClient()
 
@@ -54,20 +74,42 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        val etQuestion : EditText = findViewById(R.id.queryInput)
-        val txtResponse : TextView = findViewById(R.id.responseText)
-        val btnSubmit : Button = findViewById(R.id.submitButton)
-        val btnScheduleTask : Button = findViewById(R.id.scheduleTaskButton)
+        etQuestion  = findViewById(R.id.queryInput)
+        txtResponse = findViewById(R.id.responseText)
+        btnSubmit = findViewById(R.id.submitButton)
+        btnScheduleTask = findViewById(R.id.scheduleTaskButton)
+        suggestionsChipGroup = findViewById(R.id.suggestionsChipGroup)
+        progressBar = findViewById(R.id.progressBar)
 
-
+        // Add text change listener with debounce
+        etQuestion.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                suggestionJob?.cancel()
+                if (!s.isNullOrEmpty() && s.toString().trim().contains(" ")) {
+                    suggestionJob = scope.launch {
+                        delay(SUGGESTION_DELAY)
+                        getNextWordSuggestions(s.toString())
+                    }
+                } else {
+                    runOnUiThread {
+                        suggestionsChipGroup.removeAllViews()
+                    }
+                }
+            }
+        })
 
 
 
         btnSubmit.setOnClickListener {
             val question = etQuestion.text.toString()
+            clearInput()
+            showLoading()
             Toast.makeText(this,question,Toast.LENGTH_SHORT).show()
             getResponse(question){response ->
                 runOnUiThread {
+                    hideLoading()
                     txtResponse.text=response
                 }
 
@@ -118,6 +160,20 @@ class MainActivity : AppCompatActivity() {
                 callback("Error: ${e.message}")
             }
         }
+    }
+
+    private fun showLoading() {
+        progressBar.visibility = View.VISIBLE
+        btnSubmit.isEnabled = false
+        btnScheduleTask.isEnabled = false
+        etQuestion.isEnabled = false
+    }
+
+    private fun hideLoading() {
+        progressBar.visibility = View.GONE
+        btnSubmit.isEnabled = true
+        btnScheduleTask.isEnabled = true
+        etQuestion.isEnabled = true
     }
 
 //    private fun getResponse(question: String, callback: (String) -> Unit){
@@ -315,6 +371,50 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, "Couldn't find or open the app", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun getNextWordSuggestions(currentText: String) {
+        val prompt = """
+            Given this incomplete text: "$currentText"
+            Suggest 3 likely next words that would naturally continue this text.
+            Respond with ONLY the 3 words separated by commas, nothing else.
+            For example: "word1,word2,word3"
+        """.trimIndent()
+
+        getResponse(prompt) { response ->
+            val suggestions = response.split(",").map { it.trim() }.take(3)
+            runOnUiThread {
+                updateSuggestionChips(suggestions, etQuestion)
+            }
+        }
+    }
+
+    private fun updateSuggestionChips(suggestions: List<String>, editText: EditText) {
+        suggestionsChipGroup.removeAllViews()
+
+        suggestions.forEach { suggestion ->
+            val chip = Chip(this).apply {
+                text = suggestion
+                isCheckable = false
+                setOnClickListener {
+                    val currentText = editText.text.toString()
+                    val lastSpace = currentText.lastIndexOf(" ")
+                    val newText = if (lastSpace >= 0) {
+                        currentText.substring(0, lastSpace + 1) + suggestion + " "
+                    } else {
+                        "$currentText $suggestion "
+                    }
+                    editText.setText(newText)
+                    editText.setSelection(newText.length)
+                }
+            }
+            suggestionsChipGroup.addView(chip)
+        }
+    }
+
+    private fun clearInput() {
+        etQuestion.text.clear()
+        suggestionsChipGroup.removeAllViews()
     }
 
 

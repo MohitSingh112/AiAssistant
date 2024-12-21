@@ -21,6 +21,13 @@
 
     </com.google.android.material.textfield.TextInputLayout>
 
+    <com.google.android.material.chip.ChipGroup
+        android:id="@+id/suggestionsChipGroup"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        app:layout_constraintTop_toBottomOf="@id/queryInputLayout" />
+
     <com.google.android.material.button.MaterialButton
         android:id="@+id/submitButton"
         android:layout_width="wrap_content"
@@ -28,7 +35,7 @@
         android:layout_marginTop="16dp"
         android:text="Submit"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/queryInputLayout" />
+        app:layout_constraintTop_toBottomOf="@id/suggestionsChipGroup" />
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/scheduleTaskButton"
@@ -38,7 +45,8 @@
         android:layout_marginTop="16dp"
         android:text="Schedule Task"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/queryInputLayout" />
+        app:layout_constraintTop_toBottomOf="@id/suggestionsChipGroup" />
+
 
     <ProgressBar
         android:id="@+id/progressBar"

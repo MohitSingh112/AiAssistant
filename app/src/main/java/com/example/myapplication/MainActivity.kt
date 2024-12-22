@@ -30,12 +30,15 @@ import android.provider.AlarmClock
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
-import android.widget.ProgressBar
-import com.google.ai.client.generativeai.BuildConfig
+import android.widget.LinearLayout
+import androidx.cardview.widget.CardView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.BlockThreshold
 import com.google.ai.client.generativeai.type.HarmCategory
 import com.google.ai.client.generativeai.type.SafetySetting
+import com.google.ai.client.generativeai.type.content
 import com.google.ai.client.generativeai.type.generationConfig
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
@@ -56,15 +59,18 @@ class MainActivity : AppCompatActivity() {
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private var suggestionJob: Job? = null
+    private val messages: MutableList<ChatMessage> = mutableListOf()
 
 
     // Define UI components as class properties
     private lateinit var etQuestion: EditText
-    private lateinit var txtResponse: TextView
+    private lateinit var chatRecyclerView: RecyclerView
+    private lateinit var chatAdapter: ChatAdapter
     private lateinit var btnSubmit: Button
     private lateinit var btnScheduleTask: Button
     private lateinit var suggestionsChipGroup: ChipGroup
-    private lateinit var progressBar: ProgressBar
+    private lateinit var progressBar: CardView
+    private lateinit var defaultImage : LinearLayout
 
 
     //private val client = OkHttpClient()
@@ -75,67 +81,104 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         etQuestion  = findViewById(R.id.queryInput)
-        txtResponse = findViewById(R.id.responseText)
+        chatRecyclerView = findViewById(R.id.chatRecyclerView)
         btnSubmit = findViewById(R.id.submitButton)
         btnScheduleTask = findViewById(R.id.scheduleTaskButton)
         suggestionsChipGroup = findViewById(R.id.suggestionsChipGroup)
-        progressBar = findViewById(R.id.progressBar)
+        progressBar = findViewById(R.id.progressBarCard)
+        defaultImage = findViewById(R.id.linerLayout)
+
 
         // Add text change listener with debounce
-        etQuestion.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                suggestionJob?.cancel()
-                if (!s.isNullOrEmpty() && s.toString().trim().contains(" ")) {
-                    suggestionJob = scope.launch {
-                        delay(SUGGESTION_DELAY)
-                        getNextWordSuggestions(s.toString())
-                    }
-                } else {
+//        etQuestion.addTextChangedListener(object : TextWatcher {
+//            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+//            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+//            override fun afterTextChanged(s: Editable?) {
+//                suggestionJob?.cancel()
+//                if (!s.isNullOrEmpty() && s.toString().trim().contains(" ")) {
+//                    suggestionJob = scope.launch {
+//                        delay(SUGGESTION_DELAY)
+//                        getNextWordSuggestions(s.toString())
+//                    }
+//                } else {
+//                    runOnUiThread {
+//                        suggestionsChipGroup.removeAllViews()
+//                    }
+//                }
+//            }
+//        })
+
+        setupRecyclerView()
+        setupClickListeners()
+
+    }
+
+    private fun updateDefaultImage() {
+        if (chatAdapter.itemCount == 0) {
+            defaultImage.visibility = View.VISIBLE
+        } else {
+            defaultImage.visibility = View.GONE
+        }
+    }
+
+    private fun setupClickListeners() {
+        btnScheduleTask.setOnClickListener {
+            val task = etQuestion.text.toString()
+            if (task.isNotBlank()) {
+                showLoading()
+                // Send a specifically formatted prompt
+                val promptForAction = """
+                Analyze this command: "$task"
+                If it's about making a call, if the phone number is given then respond only with: CALL: <phone_number>
+                If it's about sending an email, only if email address and subject of the email both are in the command then respond only with: EMAIL: <recipient>|<subject>|<generated_content>
+                If it's about setting an alarm, if time is given then respond only with: ALARM: <time in HH:mm format>
+                If it's about opening app , respond only with: APP: <app_name>
+                If it's about anything but you not sure about it then respond only with: INCOMPLETE: <asking for question about the command>
+                Note* - don't respond anything expect what is told 
+                      - generate content for email based on the information user provided
+                      - don't add <> in the response
+                """.trimIndent()
+                getResponse(promptForAction) { response ->
                     runOnUiThread {
-                        suggestionsChipGroup.removeAllViews()
+                        hideLoading()
+                        parseAndExecuteAction(response)
                     }
                 }
             }
-        })
-
-
+        }
 
         btnSubmit.setOnClickListener {
             val question = etQuestion.text.toString()
-            clearInput()
-            showLoading()
-            Toast.makeText(this,question,Toast.LENGTH_SHORT).show()
-            getResponse(question){response ->
-                runOnUiThread {
-                    hideLoading()
-                    txtResponse.text=response
-                }
+            if (question.isNotBlank()) {
+                showLoading()
+                // Add user message to chat
+                addMessage(ChatMessage(question, "user"))
+                scrollToBottom()
 
-            }
-        }
-
-        btnScheduleTask.setOnClickListener {
-            val task = etQuestion.text.toString()
-            // Send a specifically formatted prompt to ChatGPT
-            val promptForAction = """
-                Analyze this command: $task If it's about making a call, respond only with: CALL: <phone_number> If it's about sending an email, respond only with: EMAIL: <recipient>|<subject>|<content> If it's about setting an alarm, respond only with: ALARM: <time in HH:mm format> If it's about opening an app, respond only with: APP: <app_name> If it's none of these, respond only with: UNKNOWN and dont write any thing else only the response""".trimIndent()
-
-            getResponse(promptForAction) { response ->
-                runOnUiThread {
-                    parseAndExecuteAction(response)
+                getResponse(question) { response ->
+                    runOnUiThread {
+                        hideLoading()
+                        // Add AI response to chat
+                        addMessage(ChatMessage(response, "model"))
+                        scrollToBottom()
+                        clearInput()
+                    }
                 }
             }
+
         }
+    }
 
-
+    private fun addMessage(message: ChatMessage) {
+        messages.add(message)
+        chatAdapter.notifyItemInserted(messages.size - 1)
+        updateDefaultImage()
     }
 
     private fun getResponse(question: String, callback: (String) -> Unit){
         val model = GenerativeModel(
             modelName = "gemini-1.5-flash-001",
-            apiKey =  com.example.myapplication.BuildConfig.API_KEY,
+            apiKey =  BuildConfig.API_KEY,
             generationConfig = generationConfig {
                 temperature = 0.15f
                 topK = 32
@@ -149,19 +192,25 @@ class MainActivity : AppCompatActivity() {
                 SafetySetting(HarmCategory.DANGEROUS_CONTENT, BlockThreshold.MEDIUM_AND_ABOVE),
             )
         )
+        val chat = model.startChat(
+            history = messages.map {
+                content (it.role){text(it.text)}
+            }.toList()
+        )
 
         scope.launch {
             try {
-                val response = model.generateContent(question)
+                val response = chat.sendMessage(question)
                 val text = response.text ?: "No response generated"
                 Log.v("data", text)
-                callback(text)  // changed from callback(response) to callback(text)
+                callback(text)
             } catch (e: Exception) {
                 callback("Error: ${e.message}")
             }
         }
     }
 
+    // to show loading (ui element)
     private fun showLoading() {
         progressBar.visibility = View.VISIBLE
         btnSubmit.isEnabled = false
@@ -169,6 +218,7 @@ class MainActivity : AppCompatActivity() {
         etQuestion.isEnabled = false
     }
 
+    // to hide loading (ui element)
     private fun hideLoading() {
         progressBar.visibility = View.GONE
         btnSubmit.isEnabled = true
@@ -251,9 +301,14 @@ class MainActivity : AppCompatActivity() {
                     val appName = result.substringAfter("APP:").trim()
                     openAppByName(appName)
                 }
+                result.startsWith("INCOMPLETE:") -> {
+                    val response = result.substringAfter("INCOMPLETE:").trim()
+                    addMessage(ChatMessage(response, "model"))
+                }
                 else -> {
                     Toast.makeText(this, "Couldn't understand the command", Toast.LENGTH_SHORT).show()
                 }
+
             }
         } catch (e: Exception) {
             Log.e("error:", e.toString())
@@ -412,11 +467,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupRecyclerView() {
+        chatAdapter = ChatAdapter(messages)
+        chatRecyclerView.apply {
+            adapter = chatAdapter
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            updateDefaultImage()
+        }
+    }
+
     private fun clearInput() {
         etQuestion.text.clear()
         suggestionsChipGroup.removeAllViews()
     }
 
+    private fun scrollToBottom() {
+        chatRecyclerView.post {
+            chatRecyclerView.smoothScrollToPosition(chatAdapter.itemCount - 1)
+        }
+    }
 
 
 }
